@@ -15,6 +15,7 @@ export class GameScene extends Phaser.Scene {
     this.lastInput = { left: false, right: false, jump: false };
     this.restartCountdown = null;
     this.predictedPlayer = null;
+    this.serverState = null;
   }
 
   create() {
@@ -170,11 +171,11 @@ export class GameScene extends Phaser.Scene {
     // Step 16: receive and apply game state
     this._onGameState = (state) => {
       this.gameStatus = state.status;
+      this.serverState = state;
       const localAuthoritativePlayer = this.playerId ? state.players[this.playerId] : null;
       const remotePlayerId = this.playerId === 'p1' ? 'p2' : 'p1';
       const remoteAuthoritativePlayer = this.playerId ? state.players[remotePlayerId] : null;
 
-      this.ballObj.setPosition(state.ball.x, state.ball.y);
       this.scoreText.setText(`${state.score.p1} : ${state.score.p2}`);
 
       if (this.playerId && localAuthoritativePlayer) {
@@ -185,15 +186,20 @@ export class GameScene extends Phaser.Scene {
         }
 
         if (this.playerId === 'p1') {
-          this.p2Obj.setPosition(remoteAuthoritativePlayer.x, remoteAuthoritativePlayer.y);
-          this.p1Obj.setPosition(this.predictedPlayer.x, this.predictedPlayer.y);
+          this.remotePlayerTarget = this.clonePlayer(remoteAuthoritativePlayer);
         } else {
-          this.p1Obj.setPosition(remoteAuthoritativePlayer.x, remoteAuthoritativePlayer.y);
-          this.p2Obj.setPosition(this.predictedPlayer.x, this.predictedPlayer.y);
+          this.remotePlayerTarget = this.clonePlayer(remoteAuthoritativePlayer);
         }
       } else {
         this.p1Obj.setPosition(state.players.p1.x, state.players.p1.y);
         this.p2Obj.setPosition(state.players.p2.x, state.players.p2.y);
+      }
+
+      this.ballTarget = { x: state.ball.x, y: state.ball.y };
+      if (this.playerId === 'p1') {
+        this.localPlayerTarget = this.clonePlayer(state.players.p1);
+      } else if (this.playerId === 'p2') {
+        this.localPlayerTarget = this.clonePlayer(state.players.p2);
       }
 
       if (state.status === 'playing') {
@@ -335,6 +341,8 @@ export class GameScene extends Phaser.Scene {
       }
     }
 
+    this.applyServerSmoothing();
+
     if (
       left  !== this.lastInput.left  ||
       right !== this.lastInput.right ||
@@ -363,8 +371,29 @@ export class GameScene extends Phaser.Scene {
     const deltaX = Math.abs(this.predictedPlayer.x - authoritativePlayer.x);
     const deltaY = Math.abs(this.predictedPlayer.y - authoritativePlayer.y);
 
-    if (deltaX > 36 || deltaY > 36) {
+    if (deltaX > 60 || deltaY > 60) {
       this.predictedPlayer = this.clonePlayer(authoritativePlayer);
+    }
+  }
+
+  applyServerSmoothing() {
+    if (!this.serverState) return;
+
+    const alpha = 0.22;
+
+    if (this.playerId && this.remotePlayerTarget) {
+      if (this.playerId === 'p1') {
+        this.p2Obj.x = Phaser.Math.Linear(this.p2Obj.x, this.remotePlayerTarget.x, alpha);
+        this.p2Obj.y = Phaser.Math.Linear(this.p2Obj.y, this.remotePlayerTarget.y, alpha);
+      } else {
+        this.p1Obj.x = Phaser.Math.Linear(this.p1Obj.x, this.remotePlayerTarget.x, alpha);
+        this.p1Obj.y = Phaser.Math.Linear(this.p1Obj.y, this.remotePlayerTarget.y, alpha);
+      }
+    }
+
+    if (this.ballTarget) {
+      this.ballObj.x = Phaser.Math.Linear(this.ballObj.x, this.ballTarget.x, alpha);
+      this.ballObj.y = Phaser.Math.Linear(this.ballObj.y, this.ballTarget.y, alpha);
     }
   }
 
