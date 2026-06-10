@@ -13,5 +13,5 @@ module.exports = {
   NET_WIDTH: 10,
   NET_HEIGHT: 80,
   WIN_SCORE: 5,
-  TICK_RATE: 30,
+  TICK_RATE: 60,
 };
