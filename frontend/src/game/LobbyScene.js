@@ -32,10 +32,10 @@ export class LobbyScene extends Phaser.Scene {
     }).setOrigin(0.5);
 
     // Join button
-    const btnBg = this.add.rectangle(C.GAME_WIDTH / 2, 250, 230, 62, 0x2255cc)
+    const btnBg = this.add.rectangle(C.GAME_WIDTH / 2, 230, 230, 62, 0x2255cc)
       .setInteractive({ useHandCursor: true });
 
-    const btnText = this.add.text(C.GAME_WIDTH / 2, 250, '방에 입장하기', {
+    const btnText = this.add.text(C.GAME_WIDTH / 2, 230, '방에 입장하기', {
       fontSize: '24px',
       color: '#ffffff',
       fontStyle: 'bold',
@@ -50,14 +50,34 @@ export class LobbyScene extends Phaser.Scene {
       socket.emit('joinRoom', 'room1');
     });
 
+    // Practice button
+    const practiceBtnBg = this.add.rectangle(C.GAME_WIDTH / 2, 310, 230, 62, 0x2a6632)
+      .setInteractive({ useHandCursor: true });
+
+    const practiceBtnText = this.add.text(C.GAME_WIDTH / 2, 310, '연습모드 시작', {
+      fontSize: '24px',
+      color: '#ffffff',
+      fontStyle: 'bold',
+    }).setOrigin(0.5);
+
+    practiceBtnBg.on('pointerover', () => practiceBtnBg.setFillStyle(0x3d8c47));
+    practiceBtnBg.on('pointerout', () => practiceBtnBg.setFillStyle(0x2a6632));
+    practiceBtnBg.on('pointerdown', () => {
+      practiceBtnBg.setFillStyle(0x1f4d27);
+      practiceBtnText.setText('준비 중...');
+      practiceBtnBg.disableInteractive();
+      btnBg.disableInteractive();
+      socket.emit('joinPractice');
+    });
+
     // Controls guide
-    this.add.text(C.GAME_WIDTH / 2, 318, '키보드:  ← → ↑  또는  A D W   |   모바일: 화면 하단 버튼', {
+    this.add.text(C.GAME_WIDTH / 2, 392, '키보드:  ← → ↑  또는  A D W   |   모바일: 화면 하단 버튼', {
       fontSize: '14px',
       color: '#6688bb',
     }).setOrigin(0.5);
 
     // Status message (roomFull, etc.)
-    this.statusText = this.add.text(C.GAME_WIDTH / 2, 358, '', {
+    this.statusText = this.add.text(C.GAME_WIDTH / 2, 350, '', {
       fontSize: '16px',
       color: '#ffee88',
       align: 'center',

@@ -14,8 +14,6 @@ export class GameScene extends Phaser.Scene {
     this.gameStatus = 'waiting';
     this.lastInput = { left: false, right: false, jump: false };
     this.restartCountdown = null;
-    this.predictedPlayer = null;
-    this.serverState = null;
   }
 
   create() {
@@ -171,36 +169,11 @@ export class GameScene extends Phaser.Scene {
     // Step 16: receive and apply game state
     this._onGameState = (state) => {
       this.gameStatus = state.status;
-      this.serverState = state;
-      const localAuthoritativePlayer = this.playerId ? state.players[this.playerId] : null;
-      const remotePlayerId = this.playerId === 'p1' ? 'p2' : 'p1';
-      const remoteAuthoritativePlayer = this.playerId ? state.players[remotePlayerId] : null;
 
+      this.p1Obj.setPosition(state.players.p1.x, state.players.p1.y);
+      this.p2Obj.setPosition(state.players.p2.x, state.players.p2.y);
       this.scoreText.setText(`${state.score.p1} : ${state.score.p2}`);
-
-      if (this.playerId && localAuthoritativePlayer) {
-        if (state.status !== 'playing' || state.ball.hitCooldown > 0 || !this.predictedPlayer) {
-          this.predictedPlayer = this.clonePlayer(localAuthoritativePlayer);
-        } else {
-          this.reconcilePredictedPlayer(localAuthoritativePlayer);
-        }
-
-        if (this.playerId === 'p1') {
-          this.remotePlayerTarget = this.clonePlayer(remoteAuthoritativePlayer);
-        } else {
-          this.remotePlayerTarget = this.clonePlayer(remoteAuthoritativePlayer);
-        }
-      } else {
-        this.p1Obj.setPosition(state.players.p1.x, state.players.p1.y);
-        this.p2Obj.setPosition(state.players.p2.x, state.players.p2.y);
-      }
-
-      this.ballTarget = { x: state.ball.x, y: state.ball.y };
-      if (this.playerId === 'p1') {
-        this.localPlayerTarget = this.clonePlayer(state.players.p1);
-      } else if (this.playerId === 'p2') {
-        this.localPlayerTarget = this.clonePlayer(state.players.p2);
-      }
+      this.ballObj.setPosition(state.ball.x, state.ball.y);
 
       if (state.status === 'playing') {
         this.showOverlay(false);
@@ -329,19 +302,6 @@ export class GameScene extends Phaser.Scene {
     const jump  = this.cursors.up.isDown    || this.wasd.jump.isDown  || this.cursors.space.isDown || touch.jump;
 
     const nextInput = { left, right, jump };
-    socket.emit('playerInput', nextInput);
-
-    if (this.playerId && this.predictedPlayer) {
-      const dt = Math.min((this.game.loop.delta ?? 16.67) / (1000 / 60), 3);
-      this.stepPredictedPlayer(this.predictedPlayer, nextInput, dt);
-      if (this.playerId === 'p1') {
-        this.p1Obj.setPosition(this.predictedPlayer.x, this.predictedPlayer.y);
-      } else {
-        this.p2Obj.setPosition(this.predictedPlayer.x, this.predictedPlayer.y);
-      }
-    }
-
-    this.applyServerSmoothing();
 
     if (
       left  !== this.lastInput.left  ||
@@ -349,81 +309,7 @@ export class GameScene extends Phaser.Scene {
       jump  !== this.lastInput.jump
     ) {
       this.lastInput = nextInput;
-    }
-  }
-
-  clonePlayer(player) {
-    return {
-      x: player.x,
-      y: player.y,
-      vx: player.vx,
-      vy: player.vy,
-      isJumping: player.isJumping,
-    };
-  }
-
-  reconcilePredictedPlayer(authoritativePlayer) {
-    if (!this.predictedPlayer) {
-      this.predictedPlayer = this.clonePlayer(authoritativePlayer);
-      return;
-    }
-
-    const deltaX = Math.abs(this.predictedPlayer.x - authoritativePlayer.x);
-    const deltaY = Math.abs(this.predictedPlayer.y - authoritativePlayer.y);
-
-    if (deltaX > 60 || deltaY > 60) {
-      this.predictedPlayer = this.clonePlayer(authoritativePlayer);
-    }
-  }
-
-  applyServerSmoothing() {
-    if (!this.serverState) return;
-
-    const alpha = 0.22;
-
-    if (this.playerId && this.remotePlayerTarget) {
-      if (this.playerId === 'p1') {
-        this.p2Obj.x = Phaser.Math.Linear(this.p2Obj.x, this.remotePlayerTarget.x, alpha);
-        this.p2Obj.y = Phaser.Math.Linear(this.p2Obj.y, this.remotePlayerTarget.y, alpha);
-      } else {
-        this.p1Obj.x = Phaser.Math.Linear(this.p1Obj.x, this.remotePlayerTarget.x, alpha);
-        this.p1Obj.y = Phaser.Math.Linear(this.p1Obj.y, this.remotePlayerTarget.y, alpha);
-      }
-    }
-
-    if (this.ballTarget) {
-      this.ballObj.x = Phaser.Math.Linear(this.ballObj.x, this.ballTarget.x, alpha);
-      this.ballObj.y = Phaser.Math.Linear(this.ballObj.y, this.ballTarget.y, alpha);
-    }
-  }
-
-  stepPredictedPlayer(player, input, dt) {
-    if (input.left) player.vx = -C.MOVE_SPEED;
-    else if (input.right) player.vx = C.MOVE_SPEED;
-    else player.vx = 0;
-
-    if (input.jump && !player.isJumping) {
-      player.vy = C.JUMP_FORCE;
-      player.isJumping = true;
-    }
-
-    player.x += player.vx * dt;
-    player.y += player.vy * dt;
-    player.vy += C.GRAVITY * dt;
-
-    const floorY = C.FLOOR_Y - C.PLAYER_HEIGHT / 2;
-    if (player.y >= floorY) {
-      player.y = floorY;
-      player.vy = 0;
-      player.isJumping = false;
-    }
-
-    const hw = C.PLAYER_WIDTH / 2;
-    const hn = C.NET_WIDTH / 2;
-    if (this.playerId === 'p1') {
-      player.x = Math.max(hw, Math.min(C.NET_X - hw - hn, player.x));
-    } else {
-      player.x = Math.max(C.NET_X + hw + hn, Math.min(C.GAME_WIDTH - hw, player.x));
+      socket.emit('playerInput', this.lastInput);
     }
   }
 

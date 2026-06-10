@@ -45,9 +45,10 @@ function getOrCreateRoom(roomId) {
   if (!rooms[roomId]) {
     rooms[roomId] = {
       id: roomId,
+      mode: 'match',
       players: {
-        p1: { socketId: null, input: { left: false, right: false, jump: false } },
-        p2: { socketId: null, input: { left: false, right: false, jump: false } },
+        p1: { socketId: null, input: { left: false, right: false, jump: false }, isBot: false },
+        p2: { socketId: null, input: { left: false, right: false, jump: false }, isBot: false },
       },
       state: createInitialState(),
       status: 'waiting',
@@ -56,6 +57,25 @@ function getOrCreateRoom(roomId) {
       lastTime: Date.now(),
     };
   }
+  return rooms[roomId];
+}
+
+function createPracticeRoom(roomId, socketId) {
+  rooms[roomId] = {
+    id: roomId,
+    mode: 'practice',
+    players: {
+      p1: { socketId, input: { left: false, right: false, jump: false }, isBot: false },
+      p2: { socketId: null, input: { left: false, right: false, jump: false }, isBot: true },
+    },
+    state: createInitialState(),
+    status: 'playing',
+    restartScheduled: false,
+    countdownTimer: null,
+    lastTime: Date.now(),
+    botBrain: { jumpLock: 0 },
+  };
+
   return rooms[roomId];
 }
 
@@ -80,6 +100,17 @@ function connectedCount(room) {
   return (room.players.p1.socketId ? 1 : 0) + (room.players.p2.socketId ? 1 : 0);
 }
 
+function humanCount(room) {
+  return ['p1', 'p2'].reduce((count, id) => {
+    const player = room.players[id];
+    return count + (player.socketId && !player.isBot ? 1 : 0);
+  }, 0);
+}
+
+function roomReady(room) {
+  return room.mode === 'practice' ? humanCount(room) >= 1 : humanCount(room) >= 2;
+}
+
 // ─── Step 17: 3-second countdown before game starts ──────────────────────────
 
 function startCountdown(room, roomId) {
@@ -97,7 +128,7 @@ function startCountdown(room, roomId) {
 
   room.countdownTimer = setInterval(() => {
     // Abort if room gone or player left
-    if (!rooms[roomId] || connectedCount(rooms[roomId]) < 2) {
+    if (!rooms[roomId] || !roomReady(rooms[roomId])) {
       clearInterval(room.countdownTimer);
       room.countdownTimer = null;
       if (rooms[roomId]) {
@@ -124,6 +155,49 @@ function startCountdown(room, roomId) {
 
     io.to(roomId).emit('gameState', room.state);
   }, 1000);
+}
+
+function startPractice(room, roomId) {
+  if (room.countdownTimer) {
+    clearInterval(room.countdownTimer);
+    room.countdownTimer = null;
+  }
+
+  room.status = 'playing';
+  room.state.status = 'playing';
+  room.state.countdown = 0;
+  room.state.winner = null;
+  room.lastTime = Date.now();
+  io.to(roomId).emit('gameState', room.state);
+}
+
+function updatePracticeBot(room) {
+  if (room.mode !== 'practice' || room.status !== 'playing') return;
+
+  const botState = room.state.players.p2;
+  const ball = room.state.ball;
+
+  const aimX = ball.x + Math.max(-24, Math.min(24, ball.vx * 4));
+  const deadZone = 14;
+  const input = { left: false, right: false, jump: false };
+
+  if (aimX < botState.x - deadZone) input.left = true;
+  else if (aimX > botState.x + deadZone) input.right = true;
+
+  const ballNearBotSide = ball.x > C.NET_X - 30;
+  const ballAboveBot = ball.y < botState.y - 26;
+  const jumpReady = !room.botBrain.jumpLock;
+
+  if (ballNearBotSide && ballAboveBot && jumpReady && Math.abs(ball.x - botState.x) < 110) {
+    input.jump = true;
+    room.botBrain.jumpLock = 14;
+  }
+
+  if (room.botBrain.jumpLock > 0) {
+    room.botBrain.jumpLock--;
+  }
+
+  room.players.p2.input = input;
 }
 
 // ─── Physics ──────────────────────────────────────────────────────────────────
@@ -276,6 +350,8 @@ setInterval(() => {
 
     const { state, players } = room;
 
+    updatePracticeBot(room);
+
     updatePlayer(state.players.p1, players.p1.input, 'p1', dt);
     updatePlayer(state.players.p2, players.p2.input, 'p2', dt);
     updateBall(state.ball, dt);
@@ -317,7 +393,21 @@ io.on('connection', (socket) => {
     // Send current state immediately so the new player sees the screen
     socket.emit('gameState', room.state);
 
-    if (connectedCount(room) === 2) startCountdown(room, roomId);
+    if (roomReady(room)) startCountdown(room, roomId);
+  });
+
+  socket.on('joinPractice', () => {
+    const rid = `practice:${socket.id}`;
+    const room = createPracticeRoom(rid, socket.id);
+
+    roomId = rid;
+    playerId = 'p1';
+    socket.join(roomId);
+    socket.emit('joined', { playerId, roomId, mode: 'practice' });
+    console.log(`${socket.id} → ${roomId} as ${playerId} (practice)`);
+
+    socket.emit('gameState', room.state);
+    startPractice(room, roomId);
   });
 
   socket.on('playerInput', (input) => {
@@ -334,8 +424,14 @@ io.on('connection', (socket) => {
 
     room.restartScheduled = false;
     room.state = createInitialState();
-    if (connectedCount(room) === 2) startCountdown(room, roomId);
-    else { room.status = 'waiting'; io.to(roomId).emit('gameState', room.state); }
+    if (room.mode === 'practice') {
+      startPractice(room, roomId);
+    } else if (roomReady(room)) {
+      startCountdown(room, roomId);
+    } else {
+      room.status = 'waiting';
+      io.to(roomId).emit('gameState', room.state);
+    }
   });
 
   // Step 18: disconnection + room cleanup
@@ -359,7 +455,7 @@ io.on('connection', (socket) => {
       room.state = createInitialState();
       console.log(`${roomId} reset — ${left} left`);
 
-      if (connectedCount(room) === 0) {
+      if (room.mode === 'practice' || humanCount(room) === 0) {
         delete rooms[roomId]; // Step 18: empty room cleanup
         console.log(`Room ${roomId} deleted`);
       } else {
