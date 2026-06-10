@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: p-valleyball
+    env: node
+    plan: free
+    buildCommand: npm install --prefix backend && npm install --prefix frontend && npm run build --prefix frontend
+    startCommand: node backend/server.js
+    autoDeploy: true
