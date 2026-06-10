@@ -14,6 +14,17 @@ export class GameScene extends Phaser.Scene {
     this.gameStatus = 'waiting';
     this.lastInput = { left: false, right: false, jump: false };
     this.restartCountdown = null;
+
+    // Client-side prediction state for own player
+    const floorY = C.FLOOR_Y - C.PLAYER_HEIGHT / 2;
+    this.localPlayer = {
+      x: this.playerId === 'p2' ? 600 : 200,
+      y: floorY,
+      vx: 0,
+      vy: 0,
+      isJumping: false,
+    };
+    this.lastUpdateTime = performance.now();
   }
 
   create() {
@@ -170,12 +181,45 @@ export class GameScene extends Phaser.Scene {
     this._onGameState = (state) => {
       this.gameStatus = state.status;
 
-      this.p1Obj.setPosition(state.players.p1.x, state.players.p1.y);
-      this.p2Obj.setPosition(state.players.p2.x, state.players.p2.y);
+      // Opponent and ball always follow server state exactly
+      const opponentId = this.playerId === 'p1' ? 'p2' : 'p1';
+      this[`${opponentId}Obj`].setPosition(state.players[opponentId].x, state.players[opponentId].y);
       this.scoreText.setText(`${state.score.p1} : ${state.score.p2}`);
       this.ballObj.setPosition(state.ball.x, state.ball.y);
 
+      // Reconcile local prediction: softly snap own player toward server truth
+      if (this.playerId) {
+        const serverPos = state.players[this.playerId];
+        const dx = serverPos.x - this.localPlayer.x;
+        const dy = serverPos.y - this.localPlayer.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist > 60) {
+          // Large discrepancy — hard snap to avoid player teleporting far
+          this.localPlayer.x = serverPos.x;
+          this.localPlayer.y = serverPos.y;
+          this.localPlayer.vx = serverPos.vx;
+          this.localPlayer.vy = serverPos.vy;
+          this.localPlayer.isJumping = serverPos.isJumping;
+        } else if (dist > 2) {
+          // Small drift — lerp toward server
+          this.localPlayer.x += dx * 0.25;
+          this.localPlayer.y += dy * 0.25;
+        }
+        // Always sync velocity from server to prevent runaway drift
+        this.localPlayer.vx = serverPos.vx;
+        this.localPlayer.vy = serverPos.vy;
+        this.localPlayer.isJumping = serverPos.isJumping;
+
+        this[`${this.playerId}Obj`].setPosition(this.localPlayer.x, this.localPlayer.y);
+      }
+
       if (state.status === 'playing') {
+        // Sync local prediction state to server at round start
+        if (this.playerId && this.gameStatus !== 'playing') {
+          const sp = state.players[this.playerId];
+          Object.assign(this.localPlayer, sp);
+          this.lastUpdateTime = performance.now();
+        }
         this.showOverlay(false);
         this.countdownNumText.setVisible(false);
         this.restartCountdownText.setVisible(false);
@@ -310,6 +354,49 @@ export class GameScene extends Phaser.Scene {
     ) {
       this.lastInput = nextInput;
       socket.emit('playerInput', this.lastInput);
+    }
+
+    // Client-side prediction: apply physics locally so own player moves instantly
+    if (this.playerId) {
+      const now = performance.now();
+      const dt = Math.min((now - this.lastUpdateTime) / (1000 / 60), 3);
+      this.lastUpdateTime = now;
+
+      this._predictLocalPlayer(this.lastInput, dt);
+      this[`${this.playerId}Obj`].setPosition(this.localPlayer.x, this.localPlayer.y);
+    }
+  }
+
+  _predictLocalPlayer(input, dt) {
+    const p = this.localPlayer;
+    const side = this.playerId;
+
+    if (input.left) p.vx = -C.MOVE_SPEED;
+    else if (input.right) p.vx = C.MOVE_SPEED;
+    else p.vx = 0;
+
+    if (input.jump && !p.isJumping) {
+      p.vy = C.JUMP_FORCE;
+      p.isJumping = true;
+    }
+
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vy += C.GRAVITY * dt;
+
+    const floorY = C.FLOOR_Y - C.PLAYER_HEIGHT / 2;
+    if (p.y >= floorY) {
+      p.y = floorY;
+      p.vy = 0;
+      p.isJumping = false;
+    }
+
+    const hw = C.PLAYER_WIDTH / 2;
+    const hn = C.NET_WIDTH / 2;
+    if (side === 'p1') {
+      p.x = Math.max(hw, Math.min(C.NET_X - hw - hn, p.x));
+    } else {
+      p.x = Math.max(C.NET_X + hw + hn, Math.min(C.GAME_WIDTH - hw, p.x));
     }
   }
 
